@@ -1,24 +1,20 @@
 """
-Busca os temas em alta da semana no Google Trends (Brasil) usando pytrends
-(biblioteca gratuita, não oficial) e salva no Supabase, junto com ideias de
-vídeo geradas por template (sem IA, apenas substituição de texto).
+Busca os temas em alta da semana no Google Trends (Brasil) usando o feed RSS
+público oficial (sem biblioteca instável, sem chave de API) e salva no
+Supabase, junto com ideias de vídeo geradas por template (sem IA).
 
 Rodar manualmente:
     python scripts/fetch_trends.py
-
-Rodar via GitHub Actions:
-    ver .github/workflows/weekly-trends.yml
 """
 
 import os
+import re
 import sys
-import time
 from datetime import date
+import xml.etree.ElementTree as ET
 
-from pytrends.request import TrendReq
+import requests
 from supabase import create_client
-
-# --- Configuração ---------------------------------------------------------
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -29,8 +25,9 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
 
 REGIAO = "BR"
 MAX_TEMAS = 15
+RSS_URL = f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={REGIAO}"
+NAMESPACE = {"ht": "https://trends.google.com/trends/trendingsearches/daily"}
 
-# Templates de ideias de vídeo — substituição simples de texto, sem IA
 TEMPLATES_IDEIA = [
     "Reagindo a {tema}",
     "3 coisas que você não sabia sobre {tema}",
@@ -46,45 +43,48 @@ def gerar_ideias(tema: str, quantidade: int = 3) -> str:
     return "\n".join(f"- {ideia}" for ideia in ideias)
 
 
+def parse_traffic(text: str | None) -> int:
+    """Converte algo como '20.000+ buscas' em um número (20000)."""
+    if not text:
+        return 50
+    digits = re.sub(r"[^\d]", "", text)
+    return int(digits) if digits else 50
+
+
 def buscar_temas_google_trends() -> list[dict]:
     """
-    Usa pytrends para buscar as buscas em alta do dia no Brasil.
-    pytrends não é uma API oficial do Google — pode ter instabilidade
-    ocasional, mas é gratuita e suficiente para uma coleta semanal.
+    Usa o feed RSS público e oficial de tendências diárias do Google Trends.
+    Não requer chave de API nem biblioteca não-oficial.
     """
-    pytrends = TrendReq(hl="pt-BR", tz=180)
     temas = []
-
     try:
-        trending = pytrends.trending_searches(pn="brazil")
-        lista_temas = trending[0].tolist()[:MAX_TEMAS]
+        resp = requests.get(RSS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
     except Exception as e:
-        print(f"Erro ao buscar trending_searches: {e}")
+        print(f"Erro ao buscar RSS do Google Trends: {e}")
         return []
 
-    # Para cada tema, tenta pegar um score relativo de interesse (0-100)
-    for i, tema in enumerate(lista_temas):
-        score = 100 - (i * (100 // max(MAX_TEMAS, 1)))  # score decrescente por posição
-        try:
-            pytrends.build_payload([tema], timeframe="now 1-d", geo=REGIAO)
-            interest = pytrends.interest_over_time()
-            if not interest.empty:
-                score = int(interest[tema].mean())
-        except Exception:
-            # Se falhar o interesse detalhado, mantém o score por posição
-            pass
+    items = root.findall(".//item")[:MAX_TEMAS]
+
+    for item in items:
+        titulo = (item.findtext("title") or "").strip()
+        if not titulo:
+            continue
+
+        traffic_el = item.find("ht:approx_traffic", NAMESPACE)
+        score = parse_traffic(traffic_el.text if traffic_el is not None else None)
 
         temas.append(
             {
-                "tema": tema,
-                "categoria": None,  # pode ser preenchido manualmente depois no admin
+                "tema": titulo,
+                "categoria": None,
                 "regiao": REGIAO,
                 "score": score,
                 "data_coleta": date.today().isoformat(),
-                "ideias_video": gerar_ideias(tema),
+                "ideias_video": gerar_ideias(titulo),
             }
         )
-        time.sleep(1)  # evita rate limit do pytrends
 
     return temas
 
@@ -95,8 +95,6 @@ def salvar_no_supabase(temas: list[dict]) -> None:
         return
 
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-
-    # upsert evita duplicar o mesmo tema na mesma data (ver unique index no schema)
     result = (
         supabase.table("trending_topics")
         .upsert(temas, on_conflict="tema,data_coleta,regiao")
