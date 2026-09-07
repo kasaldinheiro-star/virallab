@@ -25,8 +25,8 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
 
 REGIAO = "BR"
 MAX_TEMAS = 15
-RSS_URL = f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={REGIAO}"
-NAMESPACE = {"ht": "https://trends.google.com/trends/trendingsearches/daily"}
+RSS_URL = f"https://trends.google.com/trending/rss?geo={REGIAO}"
+NAMESPACE = {"ht": "https://trends.google.com/trending/rss"}
 
 TEMPLATES_IDEIA = [
     "Reagindo a {tema}",
@@ -53,7 +53,7 @@ def parse_traffic(text: str | None) -> int:
 
 def buscar_temas_google_trends() -> list[dict]:
     """
-    Usa o feed RSS público e oficial de tendências diárias do Google Trends.
+    Usa o feed RSS público de tendências do Google Trends.
     Não requer chave de API nem biblioteca não-oficial.
     """
     temas = []
