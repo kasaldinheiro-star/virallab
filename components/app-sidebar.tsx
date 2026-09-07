@@ -14,6 +14,7 @@ const NAV = [
   { href: '/produtos', label: 'Produtos em Alta', icon: Package },
   { href: '/trends', label: 'Temas em Alta', icon: TrendingUp },
   { href: '/nichos', label: 'Nichos', icon: Zap },
+  { href: '/edicao', label: 'Edição', icon: Video },
 ]
 
 export function AppSidebar({ email, isAdmin }: { email: string; isAdmin: boolean }) {
