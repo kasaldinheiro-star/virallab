@@ -13,6 +13,7 @@ const NAV = [
   { href: '/meus-videos', label: 'Meus Vídeos', icon: Video },
   { href: '/produtos', label: 'Produtos em Alta', icon: Package },
   { href: '/trends', label: 'Temas em Alta', icon: TrendingUp },
+  { href: '/nichos', label: 'Nichos', icon: Zap },
 ]
 
 export function AppSidebar({ email, isAdmin }: { email: string; isAdmin: boolean }) {
