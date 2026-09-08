@@ -1,9 +1,7 @@
 """
-Busca notícias/tendências de produtos por categoria fixa (Tecnologia, Casa,
-Cama e Banho, Fitness, Dia a Dia) usando o Google News RSS (público, gratuito).
-
-Importante: isso busca BUZZ e lançamentos comentados na mídia, não o ranking
-oficial de vendas das lojas (esse dado é fechado a cada plataforma).
+Busca notícias/tendências de produtos por categoria fixa usando Google News
+RSS. Filtra por data de publicação real (máximo 30 dias), já que o Google
+News retorna por relevância, não por recência.
 
 Rodar manualmente:
     python scripts/fetch_product_trends.py
@@ -11,7 +9,8 @@ Rodar manualmente:
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
@@ -26,14 +25,28 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     sys.exit(1)
 
 MAX_POR_CATEGORIA = 8
+MAX_DIAS_ANTIGUIDADE = 30
 
 CATEGORIAS = {
-    "tecnologia": '"lançamento tecnologia" OR "gadget em alta" OR "melhor smartphone 2026"',
+    "tecnologia": '"lançamento de celular 2026" OR "novo gadget lançado" OR "smartphone lançamento Brasil"',
     "casa": '"achadinhos para casa" OR "produtos para casa em alta" OR "organização da casa tendência"',
     "cama_banho": '"cama e banho tendência" OR "enxoval em alta" OR "produtos para o quarto"',
     "fitness": '"equipamento fitness tendência" OR "produtos para corrida" OR "acessório academia lançamento"',
     "dia_a_dia": '"produtos virais" OR "achadinhos do dia a dia" OR "utensílios em alta"',
 }
+
+
+def idade_em_dias(pub_date_str: str | None) -> int | None:
+    if not pub_date_str:
+        return None
+    try:
+        data_pub = parsedate_to_datetime(pub_date_str)
+        if data_pub.tzinfo is None:
+            data_pub = data_pub.replace(tzinfo=timezone.utc)
+        agora = datetime.now(timezone.utc)
+        return (agora - data_pub).days
+    except Exception:
+        return None
 
 
 def buscar_por_categoria(categoria: str, query: str) -> list[dict]:
@@ -48,12 +61,18 @@ def buscar_por_categoria(categoria: str, query: str) -> list[dict]:
         print(f"[{categoria}] Erro ao buscar Google News RSS: {e}")
         return []
 
-    items = root.findall(".//item")[:MAX_POR_CATEGORIA]
+    items = root.findall(".//item")
 
-    for i, item in enumerate(items):
+    for item in items:
         titulo = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
+        pub_date = item.findtext("pubDate")
+
         if not titulo:
+            continue
+
+        dias = idade_em_dias(pub_date)
+        if dias is None or dias > MAX_DIAS_ANTIGUIDADE:
             continue
 
         temas.append(
@@ -61,10 +80,13 @@ def buscar_por_categoria(categoria: str, query: str) -> list[dict]:
                 "categoria": categoria,
                 "titulo": titulo,
                 "fonte_url": link,
-                "score": MAX_POR_CATEGORIA - i,
+                "score": max(MAX_POR_CATEGORIA - dias, 1),
                 "data_coleta": date.today().isoformat(),
             }
         )
+
+        if len(temas) >= MAX_POR_CATEGORIA:
+            break
 
     return temas
 
@@ -89,7 +111,7 @@ def main():
 
     for categoria, query in CATEGORIAS.items():
         temas = buscar_por_categoria(categoria, query)
-        print(f"[{categoria}] {len(temas)} temas encontrados")
+        print(f"[{categoria}] {len(temas)} temas recentes encontrados")
         todos.extend(temas)
 
     salvar_no_supabase(todos)
