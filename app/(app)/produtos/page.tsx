@@ -1,4 +1,3 @@
-
 import { ExternalLink, Flame } from 'lucide-react'
 import { PageHeader } from '@/components/page-header'
 import { Button } from '@/components/ui/button'
@@ -7,6 +6,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { createClient } from '@/lib/supabase/server'
 import type { Product } from '@/lib/types'
 import { ProductTrendsClient } from '@/components/product-trends-client'
+
+export const dynamic = 'force-dynamic'
 
 function scoreColor(score: number) {
   if (score >= 90) return 'text-primary'
