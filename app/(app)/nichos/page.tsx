@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { PageHeader } from '@/components/page-header'
 import { NichosClient } from '@/components/nichos-client'
 
+export const dynamic = 'force-dynamic'
+
 export default async function NichosPage() {
   const supabase = await createClient()
 
