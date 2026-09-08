@@ -1,7 +1,9 @@
 """
 Busca notícias/temas recentes por nicho fixo (Analog Horror, GTA, Entretenimento)
-usando o Google News RSS (público, gratuito, estável — diferente do Trends).
-Gera ideias de vídeo por template (sem IA) e salva no Supabase.
+usando o Google News RSS (público, gratuito). Filtra por data de publicação
+real, descartando notícias com mais de 30 dias — o Google News retorna por
+relevância, não por data, então esse filtro é obrigatório para evitar
+notícias antigas.
 
 Rodar manualmente:
     python scripts/fetch_niche_topics.py
@@ -9,7 +11,8 @@ Rodar manualmente:
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
@@ -24,8 +27,8 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     sys.exit(1)
 
 MAX_TEMAS_POR_NICHO = 8
+MAX_DIAS_ANTIGUIDADE = 30  # descarta notícias mais antigas que isso
 
-# Consulta de busca no Google News por nicho + templates de ideia específicos
 NICHOS = {
     "analog_horror": {
         "query": '"analog horror" OR "terror analógico"',
@@ -55,13 +58,25 @@ NICHOS = {
 
 
 def gerar_ideias(tema: str, templates: list[str]) -> str:
-    """Gera ideias de vídeo por template específico do nicho, sem IA."""
     ideias = [t.format(tema=tema) for t in templates]
     return "\n".join(f"- {ideia}" for ideia in ideias)
 
 
+def idade_em_dias(pub_date_str: str | None) -> int | None:
+    """Converte o campo pubDate do RSS em número de dias desde hoje."""
+    if not pub_date_str:
+        return None
+    try:
+        data_pub = parsedate_to_datetime(pub_date_str)
+        if data_pub.tzinfo is None:
+            data_pub = data_pub.replace(tzinfo=timezone.utc)
+        agora = datetime.now(timezone.utc)
+        return (agora - data_pub).days
+    except Exception:
+        return None
+
+
 def buscar_temas_nicho(nicho: str, query: str, templates: list[str]) -> list[dict]:
-    """Usa o Google News RSS (público) para buscar manchetes recentes sobre o nicho."""
     url = f"https://news.google.com/rss/search?q={quote(query)}&hl=pt-BR&gl=BR&ceid=BR:pt"
     temas = []
 
@@ -73,15 +88,21 @@ def buscar_temas_nicho(nicho: str, query: str, templates: list[str]) -> list[dic
         print(f"[{nicho}] Erro ao buscar Google News RSS: {e}")
         return []
 
-    items = root.findall(".//item")[:MAX_TEMAS_POR_NICHO]
+    items = root.findall(".//item")  # pega todos, filtra por data depois
 
-    for i, item in enumerate(items):
+    for item in items:
         titulo = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
+        pub_date = item.findtext("pubDate")
+
         if not titulo:
             continue
 
-        score = MAX_TEMAS_POR_NICHO - i  # mais recente = maior score
+        dias = idade_em_dias(pub_date)
+        if dias is None or dias > MAX_DIAS_ANTIGUIDADE:
+            continue  # descarta notícia sem data ou antiga demais
+
+        score = max(MAX_TEMAS_POR_NICHO - dias, 1)  # mais recente = maior score
 
         temas.append(
             {
@@ -93,6 +114,9 @@ def buscar_temas_nicho(nicho: str, query: str, templates: list[str]) -> list[dic
                 "ideias_video": gerar_ideias(titulo, templates),
             }
         )
+
+        if len(temas) >= MAX_TEMAS_POR_NICHO:
+            break
 
     return temas
 
@@ -117,7 +141,7 @@ def main():
 
     for nicho, config in NICHOS.items():
         temas = buscar_temas_nicho(nicho, config["query"], config["templates"])
-        print(f"[{nicho}] {len(temas)} temas encontrados")
+        print(f"[{nicho}] {len(temas)} temas recentes encontrados")
         todos_temas.extend(temas)
 
     salvar_no_supabase(todos_temas)
