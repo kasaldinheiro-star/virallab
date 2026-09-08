@@ -3,10 +3,11 @@ import { PageHeader } from '@/components/page-header'
 import type { TrendingTopic } from '@/lib/types'
 import { TrendsClient } from '@/components/trends-client'
 
+export const dynamic = 'force-dynamic'
+
 export default async function TrendsPage() {
   const supabase = await createClient()
 
-  // Pega a data de coleta mais recente disponível
   const { data: latest } = await supabase
     .from('trending_topics')
     .select('data_coleta')
