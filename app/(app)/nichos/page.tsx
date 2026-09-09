@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { PageHeader } from '@/components/page-header'
 import { NichosClient } from '@/components/nichos-client'
-
+import { TriggerFetchButton } from '@/components/trigger-fetch-button'
 export const dynamic = 'force-dynamic'
 
 export default async function NichosPage() {
@@ -32,11 +32,13 @@ export default async function NichosPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Nichos"
-        description="Temas de vídeo e guia de edição por nicho, atualizados semanalmente"
-      />
+    <div className="flex items-center justify-between gap-4">
+        <PageHeader
+          title="Nichos"
+          description="Temas de vídeo e guia de edição por nicho, atualizados diariamente"
+        />
+        <TriggerFetchButton />
+      </div>
       <NichosClient guides={guides ?? []} topicsByNicho={topicsByNicho} />
     </div>
   )
