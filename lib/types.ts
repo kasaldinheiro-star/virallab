@@ -37,6 +37,10 @@ export interface VideoAnalysis {
   frame_urls: string[]
   is_own_video: boolean
   created_at: string
+  views_24h: number | null
+  curtiu: boolean | null
+  favorito: boolean
+  notas_resultado: string | null
 }
 
 export interface Product {
