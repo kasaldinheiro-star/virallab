@@ -1,6 +1,7 @@
 """
 Busca notícias/tendências de produtos por categoria fixa usando Google News
-RSS. Filtra por data de publicação (máximo 30 dias) e remove duplicados.
+RSS. Tecnologia busca também em inglês (maior cobertura de gadgets).
+Filtra por data de publicação (máximo 30 dias) e remove duplicados.
 
 Rodar manualmente:
     python scripts/fetch_product_trends.py
@@ -24,15 +25,27 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     print("Erro: defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no ambiente.")
     sys.exit(1)
 
-MAX_POR_CATEGORIA = 8
+MAX_POR_CATEGORIA = 10
 MAX_DIAS_ANTIGUIDADE = 30
 
+# Cada categoria pode buscar em mais de um idioma/região: (query, hl, gl)
 CATEGORIAS = {
-    "tecnologia": '"lançamento smartphone" OR "novo notebook" OR "gadget 2026" OR "review tecnologia"',
-    "casa": '"decoração tendência" OR "produtos para casa" OR "eletrodoméstico lançamento" OR "achadinhos casa"',
-    "cama_banho": '"jogo de cama lançamento" OR "toalha tendência" OR "travesseiro" OR "edredom"',
-    "fitness": '"tênis de corrida lançamento" OR "suplemento tendência" OR "equipamento academia" OR "roupa fitness"',
-    "dia_a_dia": '"produtos virais" OR "achadinhos do dia a dia" OR "utensílios em alta"',
+    "tecnologia": [
+        ('"lançamento smartphone" OR "novo notebook" OR "gadget 2026"', "pt-BR", "BR"),
+        ('"new gadget launch" OR "best tech 2026" OR "smartphone review"', "en-US", "US"),
+    ],
+    "casa": [
+        ('"decoração tendência" OR "produtos para casa" OR "eletrodoméstico lançamento" OR "achadinhos casa"', "pt-BR", "BR"),
+    ],
+    "cama_banho": [
+        ('"jogo de cama lançamento" OR "toalha tendência" OR "travesseiro" OR "edredom"', "pt-BR", "BR"),
+    ],
+    "fitness": [
+        ('"tênis de corrida lançamento" OR "suplemento tendência" OR "equipamento academia" OR "roupa fitness"', "pt-BR", "BR"),
+    ],
+    "dia_a_dia": [
+        ('"produtos virais" OR "achadinhos do dia a dia" OR "utensílios em alta"', "pt-BR", "BR"),
+    ],
 }
 
 
@@ -54,51 +67,55 @@ def normalizar_titulo(titulo: str) -> str:
     return re.sub(r"[^a-z0-9]", "", sem_fonte.lower())
 
 
-def buscar_por_categoria(categoria: str, query: str) -> list[dict]:
-    url = f"https://news.google.com/rss/search?q={quote(query)}&hl=pt-BR&gl=BR&ceid=BR:pt"
-    temas = []
-    titulos_vistos: set[str] = set()
-
+def buscar_rss(query: str, hl: str, gl: str) -> list[dict]:
+    url = f"https://news.google.com/rss/search?q={quote(query)}&hl={hl}&gl={gl}&ceid={gl}:{hl.split('-')[0]}"
     try:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
         root = ET.fromstring(resp.content)
+        return root.findall(".//item")
     except Exception as e:
-        print(f"[{categoria}] Erro ao buscar Google News RSS: {e}")
+        print(f"  Erro ao buscar RSS ({hl}/{gl}): {e}")
         return []
 
-    items = root.findall(".//item")
 
-    for item in items:
-        titulo = (item.findtext("title") or "").strip()
-        link = (item.findtext("link") or "").strip()
-        pub_date = item.findtext("pubDate")
+def buscar_por_categoria(categoria: str, buscas: list[tuple[str, str, str]]) -> list[dict]:
+    temas = []
+    titulos_vistos: set[str] = set()
 
-        if not titulo:
-            continue
+    for query, hl, gl in buscas:
+        items = buscar_rss(query, hl, gl)
 
-        chave = normalizar_titulo(titulo)
-        if chave in titulos_vistos:
-            continue
+        for item in items:
+            titulo = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub_date = item.findtext("pubDate")
 
-        dias = idade_em_dias(pub_date)
-        if dias is None or dias > MAX_DIAS_ANTIGUIDADE:
-            continue
+            if not titulo:
+                continue
 
-        titulos_vistos.add(chave)
+            chave = normalizar_titulo(titulo)
+            if chave in titulos_vistos:
+                continue
 
-        temas.append(
-            {
-                "categoria": categoria,
-                "titulo": titulo,
-                "fonte_url": link,
-                "score": max(MAX_POR_CATEGORIA - dias, 1),
-                "data_coleta": date.today().isoformat(),
-            }
-        )
+            dias = idade_em_dias(pub_date)
+            if dias is None or dias > MAX_DIAS_ANTIGUIDADE:
+                continue
 
-        if len(temas) >= MAX_POR_CATEGORIA:
-            break
+            titulos_vistos.add(chave)
+
+            temas.append(
+                {
+                    "categoria": categoria,
+                    "titulo": titulo,
+                    "fonte_url": link,
+                    "score": max(MAX_POR_CATEGORIA - dias, 1),
+                    "data_coleta": date.today().isoformat(),
+                }
+            )
+
+            if len(temas) >= MAX_POR_CATEGORIA:
+                return temas
 
     return temas
 
@@ -121,8 +138,8 @@ def main():
     print(f"Buscando tendências de produto — {date.today().isoformat()}")
     todos = []
 
-    for categoria, query in CATEGORIAS.items():
-        temas = buscar_por_categoria(categoria, query)
+    for categoria, buscas in CATEGORIAS.items():
+        temas = buscar_por_categoria(categoria, buscas)
         print(f"[{categoria}] {len(temas)} temas recentes e únicos encontrados")
         todos.extend(temas)
 
