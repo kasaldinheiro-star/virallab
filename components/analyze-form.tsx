@@ -126,9 +126,14 @@ export function AnalyzeForm({ isOwnVideo = false }: { isOwnVideo?: boolean }) {
 
       {result && (
         <AnalysisResult
+          analysisId={result.id}
           matched={(result.matched_patterns_json ?? []) as MatchedPattern[]}
           metrics={result.video_metrics_json}
           frameUrls={result.frame_urls ?? []}
+          initialViews={result.views_24h}
+          initialCurtiu={result.curtiu}
+          initialFavorito={result.favorito}
+          initialNotas={result.notas_resultado}
         />
       )}
     </div>
