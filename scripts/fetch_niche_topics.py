@@ -1,15 +1,14 @@
 """
 Busca notícias/temas recentes por nicho fixo (Analog Horror, GTA, Entretenimento)
 usando o Google News RSS (público, gratuito). Filtra por data de publicação
-real, descartando notícias com mais de 30 dias — o Google News retorna por
-relevância, não por data, então esse filtro é obrigatório para evitar
-notícias antigas.
+real (máximo 30 dias) e remove duplicados (mesma notícia, fontes diferentes).
 
 Rodar manualmente:
     python scripts/fetch_niche_topics.py
 """
 
 import os
+import re
 import sys
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -27,11 +26,11 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     sys.exit(1)
 
 MAX_TEMAS_POR_NICHO = 8
-MAX_DIAS_ANTIGUIDADE = 30  # descarta notícias mais antigas que isso
+MAX_DIAS_ANTIGUIDADE = 30
 
 NICHOS = {
     "analog_horror": {
-        "query": '"analog horror" OR "terror analógico"',
+        "query": '"analog horror" OR "terror analógico" OR "found footage terror" OR "creepypasta"',
         "templates": [
             "Terror analógico: recriando o estilo de {tema}",
             "Analisando o found footage de {tema}",
@@ -47,7 +46,7 @@ NICHOS = {
         ],
     },
     "entretenimento": {
-        "query": '"entretenimento viral" OR "tendência entretenimento"',
+        "query": '"reality show" OR "polêmica famosos" OR "novela audiência" OR "celebridade repercussão"',
         "templates": [
             "Minha opinião sobre {tema}",
             "Reagindo a {tema}",
@@ -63,7 +62,6 @@ def gerar_ideias(tema: str, templates: list[str]) -> str:
 
 
 def idade_em_dias(pub_date_str: str | None) -> int | None:
-    """Converte o campo pubDate do RSS em número de dias desde hoje."""
     if not pub_date_str:
         return None
     try:
@@ -76,9 +74,17 @@ def idade_em_dias(pub_date_str: str | None) -> int | None:
         return None
 
 
+def normalizar_titulo(titulo: str) -> str:
+    """Remove o sufixo ' - Fonte' e baixa a caixa, para detectar duplicados
+    da mesma notícia vinda de sites diferentes."""
+    sem_fonte = re.split(r"\s[-–]\s", titulo)[0]
+    return re.sub(r"[^a-z0-9]", "", sem_fonte.lower())
+
+
 def buscar_temas_nicho(nicho: str, query: str, templates: list[str]) -> list[dict]:
     url = f"https://news.google.com/rss/search?q={quote(query)}&hl=pt-BR&gl=BR&ceid=BR:pt"
     temas = []
+    titulos_vistos: set[str] = set()
 
     try:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -88,7 +94,7 @@ def buscar_temas_nicho(nicho: str, query: str, templates: list[str]) -> list[dic
         print(f"[{nicho}] Erro ao buscar Google News RSS: {e}")
         return []
 
-    items = root.findall(".//item")  # pega todos, filtra por data depois
+    items = root.findall(".//item")
 
     for item in items:
         titulo = (item.findtext("title") or "").strip()
@@ -98,18 +104,22 @@ def buscar_temas_nicho(nicho: str, query: str, templates: list[str]) -> list[dic
         if not titulo:
             continue
 
+        chave = normalizar_titulo(titulo)
+        if chave in titulos_vistos:
+            continue  # duplicado da mesma notícia em outra fonte
+
         dias = idade_em_dias(pub_date)
         if dias is None or dias > MAX_DIAS_ANTIGUIDADE:
-            continue  # descarta notícia sem data ou antiga demais
+            continue
 
-        score = max(MAX_TEMAS_POR_NICHO - dias, 1)  # mais recente = maior score
+        titulos_vistos.add(chave)
 
         temas.append(
             {
                 "nicho": nicho,
                 "titulo": titulo,
                 "fonte_url": link,
-                "score": score,
+                "score": max(MAX_TEMAS_POR_NICHO - dias, 1),
                 "data_coleta": date.today().isoformat(),
                 "ideias_video": gerar_ideias(titulo, templates),
             }
@@ -141,7 +151,7 @@ def main():
 
     for nicho, config in NICHOS.items():
         temas = buscar_temas_nicho(nicho, config["query"], config["templates"])
-        print(f"[{nicho}] {len(temas)} temas recentes encontrados")
+        print(f"[{nicho}] {len(temas)} temas recentes e únicos encontrados")
         todos_temas.extend(temas)
 
     salvar_no_supabase(todos_temas)
