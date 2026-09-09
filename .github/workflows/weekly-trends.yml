@@ -2,10 +2,10 @@ name: Weekly Trends Fetch
 
 on:
   schedule:
-    # Toda segunda-feira às 9h (horário UTC — ajuste se precisar de horário exato de Brasília)
-    - cron: "0 9 * * 1"
-  workflow_dispatch: {} # permite rodar manualmente pelo botão "Run workflow" no GitHub
-
+    # Todo dia às 9h (horário UTC)
+    - cron: "0 9 * * *"
+  workflow_dispatch: {} # permite rodar manualmente pelo botão do app ou pelo GitHub
+  
 jobs:
   fetch-trends:
     runs-on: ubuntu-latest
