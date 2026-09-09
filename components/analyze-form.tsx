@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { createClient } from '@/lib/supabase/client'
 import type { MatchedPattern, VideoAnalysis } from '@/lib/types'
 
 export function AnalyzeForm({ isOwnVideo = false }: { isOwnVideo?: boolean }) {
@@ -16,6 +17,7 @@ export function AnalyzeForm({ isOwnVideo = false }: { isOwnVideo?: boolean }) {
   const [transcript, setTranscript] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
+  const [statusMsg, setStatusMsg] = useState('')
   const [result, setResult] = useState<VideoAnalysis | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -28,14 +30,46 @@ export function AnalyzeForm({ isOwnVideo = false }: { isOwnVideo?: boolean }) {
     setLoading(true)
     setResult(null)
 
-    const form = new FormData()
-    form.set('transcript', transcript)
-    form.set('is_own_video', String(isOwnVideo))
-    if (file) form.set('video', file)
-
     try {
-      const res = await fetch('/api/analyze', { method: 'POST', body: form })
+      let videoPath: string | null = null
+
+      if (file) {
+        setStatusMsg('Enviando vídeo...')
+        const supabase = createClient()
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+
+        if (!user) {
+          toast.error('Sessão expirada. Faça login novamente.')
+          return
+        }
+
+        const ext = file.name.split('.').pop() || 'mp4'
+        videoPath = `${user.id}/${crypto.randomUUID()}.${ext}`
+
+        const { error: uploadError } = await supabase.storage
+          .from('videos-temp')
+          .upload(videoPath, file, { contentType: file.type || 'video/mp4' })
+
+        if (uploadError) {
+          toast.error('Falha ao enviar o vídeo. Tente um arquivo menor.')
+          return
+        }
+      }
+
+      setStatusMsg('Analisando...')
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcript,
+          is_own_video: isOwnVideo,
+          video_path: videoPath,
+        }),
+      })
       const data = await res.json()
+
       if (!res.ok) {
         toast.error(data.error ?? 'Falha na análise.')
         return
@@ -47,6 +81,7 @@ export function AnalyzeForm({ isOwnVideo = false }: { isOwnVideo?: boolean }) {
       toast.error('Erro de conexão.')
     } finally {
       setLoading(false)
+      setStatusMsg('')
     }
   }
 
@@ -111,7 +146,7 @@ export function AnalyzeForm({ isOwnVideo = false }: { isOwnVideo?: boolean }) {
               {loading ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Analisando...
+                  {statusMsg || 'Analisando...'}
                 </>
               ) : (
                 <>
