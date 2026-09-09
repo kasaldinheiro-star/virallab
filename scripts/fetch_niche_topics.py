@@ -1,7 +1,8 @@
 """
 Busca notícias/temas recentes por nicho fixo (Analog Horror, GTA, Entretenimento)
-usando o Google News RSS (público, gratuito). Filtra por data de publicação
-real (máximo 30 dias) e remove duplicados (mesma notícia, fontes diferentes).
+usando o Google News RSS (público, gratuito). Alguns nichos buscam em mais de
+um idioma (ex: Analog Horror também em inglês, que tem cobertura maior).
+Filtra por data de publicação (máximo 30 dias) e remove duplicados.
 
 Rodar manualmente:
     python scripts/fetch_niche_topics.py
@@ -25,12 +26,16 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
     print("Erro: defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no ambiente.")
     sys.exit(1)
 
-MAX_TEMAS_POR_NICHO = 8
+MAX_TEMAS_POR_NICHO = 10
 MAX_DIAS_ANTIGUIDADE = 30
 
+# Cada nicho pode buscar em mais de um idioma/região: (query, hl, gl)
 NICHOS = {
     "analog_horror": {
-        "query": '"analog horror" OR "terror analógico" OR "found footage terror" OR "creepypasta"',
+        "buscas": [
+            ('"analog horror" OR "terror analógico" OR "creepypasta"', "pt-BR", "BR"),
+            ('"analog horror" OR "found footage horror series"', "en-US", "US"),
+        ],
         "templates": [
             "Terror analógico: recriando o estilo de {tema}",
             "Analisando o found footage de {tema}",
@@ -38,7 +43,9 @@ NICHOS = {
         ],
     },
     "gta": {
-        "query": '"GTA 6" OR "GTA VI" OR "Grand Theft Auto 6"',
+        "buscas": [
+            ('"GTA 6" OR "GTA VI" OR "Grand Theft Auto 6"', "pt-BR", "BR"),
+        ],
         "templates": [
             "Tudo que sabemos sobre {tema}",
             "Reagindo às novidades de {tema}",
@@ -46,7 +53,9 @@ NICHOS = {
         ],
     },
     "entretenimento": {
-        "query": '"reality show" OR "polêmica famosos" OR "novela audiência" OR "celebridade repercussão"',
+        "buscas": [
+            ('"reality show" OR "polêmica famosos" OR "novela audiência" OR "celebridade repercussão"', "pt-BR", "BR"),
+        ],
         "templates": [
             "Minha opinião sobre {tema}",
             "Reagindo a {tema}",
@@ -75,58 +84,61 @@ def idade_em_dias(pub_date_str: str | None) -> int | None:
 
 
 def normalizar_titulo(titulo: str) -> str:
-    """Remove o sufixo ' - Fonte' e baixa a caixa, para detectar duplicados
-    da mesma notícia vinda de sites diferentes."""
     sem_fonte = re.split(r"\s[-–]\s", titulo)[0]
     return re.sub(r"[^a-z0-9]", "", sem_fonte.lower())
 
 
-def buscar_temas_nicho(nicho: str, query: str, templates: list[str]) -> list[dict]:
-    url = f"https://news.google.com/rss/search?q={quote(query)}&hl=pt-BR&gl=BR&ceid=BR:pt"
-    temas = []
-    titulos_vistos: set[str] = set()
-
+def buscar_rss(query: str, hl: str, gl: str) -> list[dict]:
+    """Busca um feed do Google News num idioma/região específico."""
+    url = f"https://news.google.com/rss/search?q={quote(query)}&hl={hl}&gl={gl}&ceid={gl}:{hl.split('-')[0]}"
     try:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
         root = ET.fromstring(resp.content)
+        return root.findall(".//item")
     except Exception as e:
-        print(f"[{nicho}] Erro ao buscar Google News RSS: {e}")
+        print(f"  Erro ao buscar RSS ({hl}/{gl}): {e}")
         return []
 
-    items = root.findall(".//item")
 
-    for item in items:
-        titulo = (item.findtext("title") or "").strip()
-        link = (item.findtext("link") or "").strip()
-        pub_date = item.findtext("pubDate")
+def buscar_temas_nicho(nicho: str, buscas: list[tuple[str, str, str]], templates: list[str]) -> list[dict]:
+    temas = []
+    titulos_vistos: set[str] = set()
 
-        if not titulo:
-            continue
+    for query, hl, gl in buscas:
+        items = buscar_rss(query, hl, gl)
 
-        chave = normalizar_titulo(titulo)
-        if chave in titulos_vistos:
-            continue  # duplicado da mesma notícia em outra fonte
+        for item in items:
+            titulo = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub_date = item.findtext("pubDate")
 
-        dias = idade_em_dias(pub_date)
-        if dias is None or dias > MAX_DIAS_ANTIGUIDADE:
-            continue
+            if not titulo:
+                continue
 
-        titulos_vistos.add(chave)
+            chave = normalizar_titulo(titulo)
+            if chave in titulos_vistos:
+                continue
 
-        temas.append(
-            {
-                "nicho": nicho,
-                "titulo": titulo,
-                "fonte_url": link,
-                "score": max(MAX_TEMAS_POR_NICHO - dias, 1),
-                "data_coleta": date.today().isoformat(),
-                "ideias_video": gerar_ideias(titulo, templates),
-            }
-        )
+            dias = idade_em_dias(pub_date)
+            if dias is None or dias > MAX_DIAS_ANTIGUIDADE:
+                continue
 
-        if len(temas) >= MAX_TEMAS_POR_NICHO:
-            break
+            titulos_vistos.add(chave)
+
+            temas.append(
+                {
+                    "nicho": nicho,
+                    "titulo": titulo,
+                    "fonte_url": link,
+                    "score": max(MAX_TEMAS_POR_NICHO - dias, 1),
+                    "data_coleta": date.today().isoformat(),
+                    "ideias_video": gerar_ideias(titulo, templates),
+                }
+            )
+
+            if len(temas) >= MAX_TEMAS_POR_NICHO:
+                return temas
 
     return temas
 
@@ -150,7 +162,7 @@ def main():
     todos_temas = []
 
     for nicho, config in NICHOS.items():
-        temas = buscar_temas_nicho(nicho, config["query"], config["templates"])
+        temas = buscar_temas_nicho(nicho, config["buscas"], config["templates"])
         print(f"[{nicho}] {len(temas)} temas recentes e únicos encontrados")
         todos_temas.extend(temas)
 
