@@ -1,13 +1,13 @@
 """
 Busca notícias/tendências de produtos por categoria fixa usando Google News
-RSS. Filtra por data de publicação real (máximo 30 dias), já que o Google
-News retorna por relevância, não por recência.
+RSS. Filtra por data de publicação (máximo 30 dias) e remove duplicados.
 
 Rodar manualmente:
     python scripts/fetch_product_trends.py
 """
 
 import os
+import re
 import sys
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -28,10 +28,10 @@ MAX_POR_CATEGORIA = 8
 MAX_DIAS_ANTIGUIDADE = 30
 
 CATEGORIAS = {
-    "tecnologia": '"lançamento de celular 2026" OR "novo gadget lançado" OR "smartphone lançamento Brasil"',
-    "casa": '"achadinhos para casa" OR "produtos para casa em alta" OR "organização da casa tendência"',
-    "cama_banho": '"cama e banho tendência" OR "enxoval em alta" OR "produtos para o quarto"',
-    "fitness": '"equipamento fitness tendência" OR "produtos para corrida" OR "acessório academia lançamento"',
+    "tecnologia": '"lançamento smartphone" OR "novo notebook" OR "gadget 2026" OR "review tecnologia"',
+    "casa": '"decoração tendência" OR "produtos para casa" OR "eletrodoméstico lançamento" OR "achadinhos casa"',
+    "cama_banho": '"jogo de cama lançamento" OR "toalha tendência" OR "travesseiro" OR "edredom"',
+    "fitness": '"tênis de corrida lançamento" OR "suplemento tendência" OR "equipamento academia" OR "roupa fitness"',
     "dia_a_dia": '"produtos virais" OR "achadinhos do dia a dia" OR "utensílios em alta"',
 }
 
@@ -49,9 +49,15 @@ def idade_em_dias(pub_date_str: str | None) -> int | None:
         return None
 
 
+def normalizar_titulo(titulo: str) -> str:
+    sem_fonte = re.split(r"\s[-–]\s", titulo)[0]
+    return re.sub(r"[^a-z0-9]", "", sem_fonte.lower())
+
+
 def buscar_por_categoria(categoria: str, query: str) -> list[dict]:
     url = f"https://news.google.com/rss/search?q={quote(query)}&hl=pt-BR&gl=BR&ceid=BR:pt"
     temas = []
+    titulos_vistos: set[str] = set()
 
     try:
         resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
@@ -71,9 +77,15 @@ def buscar_por_categoria(categoria: str, query: str) -> list[dict]:
         if not titulo:
             continue
 
+        chave = normalizar_titulo(titulo)
+        if chave in titulos_vistos:
+            continue
+
         dias = idade_em_dias(pub_date)
         if dias is None or dias > MAX_DIAS_ANTIGUIDADE:
             continue
+
+        titulos_vistos.add(chave)
 
         temas.append(
             {
@@ -111,7 +123,7 @@ def main():
 
     for categoria, query in CATEGORIAS.items():
         temas = buscar_por_categoria(categoria, query)
-        print(f"[{categoria}] {len(temas)} temas recentes encontrados")
+        print(f"[{categoria}] {len(temas)} temas recentes e únicos encontrados")
         todos.extend(temas)
 
     salvar_no_supabase(todos)
