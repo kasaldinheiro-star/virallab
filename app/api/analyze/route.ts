@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { processVideo } from '@/lib/ffmpeg'
 import { matchPatterns } from '@/lib/patterns'
@@ -7,8 +6,6 @@ import type { Pattern } from '@/lib/types'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
-
-const MAX_VIDEO_BYTES = 50 * 1024 * 1024 // 50MB
 
 export async function POST(request: Request) {
   const supabase = await createClient()
@@ -20,18 +17,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 })
   }
 
-  let form: FormData
+  let body: { transcript?: string; is_own_video?: boolean; video_path?: string | null }
   try {
-    form = await request.formData()
+    body = await request.json()
   } catch {
     return NextResponse.json({ error: 'Requisição inválida.' }, { status: 400 })
   }
 
-  const transcript = String(form.get('transcript') ?? '').trim()
-  const isOwnVideo = String(form.get('is_own_video') ?? 'false') === 'true'
-  const video = form.get('video')
+  const transcript = (body.transcript ?? '').trim()
+  const isOwnVideo = Boolean(body.is_own_video)
+  const videoPath = body.video_path || null
 
-  if (!transcript && !(video instanceof File)) {
+  if (!transcript && !videoPath) {
     return NextResponse.json(
       { error: 'Envie uma transcrição ou um vídeo para analisar.' },
       { status: 400 },
@@ -50,23 +47,30 @@ export async function POST(request: Request) {
   const matched = matchPatterns(transcript, (patterns ?? []) as Pattern[])
 
   // 2. Processamento de vídeo com ffmpeg (opcional)
+  // O vídeo já foi enviado direto pelo navegador para o Supabase Storage
+  // (bucket 'videos-temp'), evitando o limite de tamanho de corpo de
+  // requisição da função serverless. Aqui só baixamos e processamos.
   let videoMetrics = null
   const frameUrls: string[] = []
 
-  if (video instanceof File && video.size > 0) {
-    if (video.size > MAX_VIDEO_BYTES) {
-      return NextResponse.json(
-        { error: 'Vídeo muito grande. Limite de 50MB.' },
-        { status: 413 },
-      )
-    }
-
+  if (videoPath) {
     try {
-      const buffer = Buffer.from(await video.arrayBuffer())
+      const { data: videoBlob, error: downloadError } = await supabase.storage
+        .from('videos-temp')
+        .download(videoPath)
+
+      if (downloadError || !videoBlob) {
+        return NextResponse.json(
+          { error: 'Não foi possível recuperar o vídeo enviado.' },
+          { status: 500 },
+        )
+      }
+
+      const buffer = Buffer.from(await videoBlob.arrayBuffer())
       const { metrics, frames } = await processVideo(buffer)
       videoMetrics = metrics
 
-      const analysisId = randomUUID()
+      const analysisId = crypto.randomUUID()
       for (let i = 0; i < frames.length; i++) {
         const path = `${user.id}/${analysisId}/${String(i).padStart(4, '0')}.jpg`
         const { error: uploadError } = await supabase.storage
@@ -86,6 +90,9 @@ export async function POST(request: Request) {
         { error: 'Não foi possível processar o vídeo. Verifique o formato (mp4).' },
         { status: 500 },
       )
+    } finally {
+      // Limpa o vídeo temporário do storage, já processado
+      await supabase.storage.from('videos-temp').remove([videoPath]).catch(() => {})
     }
   }
 
